@@ -60,10 +60,12 @@ const markPaymentSuccessful = async (payment, cfPaymentId) => {
 // CUSTOMER: CREATE UPI PAYMENT ORDER
 // POST /api/payments/upi/create-order/:billId
 // ==========================================
+
 const createUpiOrder = async (req, res) => {
   let payment;
 
   try {
+    // 1. Customer role validation
     if (req.user.role !== "user") {
       return res.status(403).json({
         success: false,
@@ -71,6 +73,7 @@ const createUpiOrder = async (req, res) => {
       });
     }
 
+    // 2. Cashfree credentials validation
     if (
       !process.env.CASHFREE_CLIENT_ID ||
       !process.env.CASHFREE_CLIENT_SECRET
@@ -81,6 +84,7 @@ const createUpiOrder = async (req, res) => {
       });
     }
 
+    // 3. Find approved bill
     const bill = await Bill.findOne({
       _id: req.params.billId,
       userId: req.user._id,
@@ -94,6 +98,7 @@ const createUpiOrder = async (req, res) => {
       });
     }
 
+    // 4. Get bill amount
     const amount = getBillAmount(bill);
 
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -103,11 +108,13 @@ const createUpiOrder = async (req, res) => {
       });
     }
 
+    // 5. Find latest payment record
     payment = await Payment.findOne({
       billId: bill._id,
       userId: req.user._id,
-    });
+    }).sort({ createdAt: -1 });
 
+    // 6. Already paid check
     if (payment?.status === "PAID") {
       return res.status(409).json({
         success: false,
@@ -115,14 +122,91 @@ const createUpiOrder = async (req, res) => {
       });
     }
 
+    // 7. Existing pending payment check
     if (payment?.status === "PENDING") {
-      return res.status(409).json({
-        success: false,
-        message:
-          `A ${payment.paymentMethod} payment is already pending for this bill.`,
-      });
+
+      // Cash pending - don't allow UPI
+      if (payment.paymentMethod === "CASH") {
+        return res.status(409).json({
+          success: false,
+          message: "A cash payment is already pending for this bill.",
+        });
+      }
+
+      // Check existing UPI order with Cashfree
+      try {
+        const existingOrder = await axios.get(
+          `${CASHFREE_BASE_URL}/orders/${payment.orderId}`,
+          {
+            headers: getCashfreeHeaders(),
+            timeout: 15000,
+          }
+        );
+
+        const orderStatus = existingOrder.data.order_status;
+
+        // Existing order is still active
+        if (
+          orderStatus === "ACTIVE" &&
+          existingOrder.data.payment_session_id
+        ) {
+          return res.status(200).json({
+            success: true,
+            message: "Existing payment order retrieved.",
+            orderId: payment.orderId,
+            paymentSessionId:
+              existingOrder.data.payment_session_id,
+            amount: payment.amount,
+            currency: "INR",
+          });
+        }
+
+        // Cashfree says already paid
+        if (orderStatus === "PAID") {
+          return res.status(409).json({
+            success: false,
+            message:
+              "Payment may already be completed. Please verify your payment.",
+          });
+        }
+
+        // Expired or terminated order
+        if (
+          orderStatus === "EXPIRED" ||
+          orderStatus === "TERMINATED"
+        ) {
+          payment.status = "FAILED";
+          await payment.save();
+        } else {
+          return res.status(409).json({
+            success: false,
+            message: "Your previous payment is still processing.",
+          });
+        }
+
+      } catch (cashfreeError) {
+
+        // Only mark failed if Cashfree confirms order doesn't exist
+        if (cashfreeError.response?.status === 404) {
+          payment.status = "FAILED";
+          await payment.save();
+        } else {
+          console.error(
+            "Existing Cashfree order check failed:",
+            cashfreeError.response?.data ||
+              cashfreeError.message
+          );
+
+          return res.status(503).json({
+            success: false,
+            message:
+              "Unable to check previous payment. Please try again.",
+          });
+        }
+      }
     }
 
+    // 8. Get customer details
     const customer = await User.findById(req.user._id);
 
     if (!customer) {
@@ -148,9 +232,10 @@ const createUpiOrder = async (req, res) => {
       });
     }
 
+    // 9. Generate new order ID
     const orderId = generateOrderId();
 
-    // Reuse an old FAILED record, if one exists.
+    // 10. Reuse failed payment record or create new record
     if (payment) {
       payment.orderId = orderId;
       payment.amount = amount;
@@ -159,7 +244,9 @@ const createUpiOrder = async (req, res) => {
       payment.status = "PENDING";
       payment.cfOrderId = "";
       payment.cfPaymentId = "";
+
       await payment.save();
+
     } else {
       payment = await Payment.create({
         billId: bill._id,
@@ -172,24 +259,28 @@ const createUpiOrder = async (req, res) => {
       });
     }
 
+    // 11. Cashfree request body
     const requestBody = {
       order_id: orderId,
       order_amount: amount,
       order_currency: "INR",
+
       customer_details: {
         customer_id: String(req.user._id),
         customer_name: customer.username || "Customer",
         customer_email: customer.email,
         customer_phone: phone,
       },
+
       order_meta: {
         return_url:
-          `${process.env.FRONTEND_URL}/payment-status?order_id=${orderId}`,
+          `${process.env.FRONTEND_URL}/userpayments?order_id=${orderId}`,
       },
+
       order_note: `Bismi Earth Movers bill ${bill._id}`,
-      payment_methods: "upi",
     };
 
+    // 12. Create Cashfree order
     const response = await axios.post(
       `${CASHFREE_BASE_URL}/orders`,
       requestBody,
@@ -200,40 +291,59 @@ const createUpiOrder = async (req, res) => {
     );
 
     if (!response.data.payment_session_id) {
-      throw new Error("Cashfree did not return a payment session ID.");
+      throw new Error(
+        "Cashfree did not return a payment session ID."
+      );
     }
 
-    payment.cfOrderId = String(response.data.cf_order_id || "");
+    // 13. Save Cashfree order ID
+    payment.cfOrderId = String(
+      response.data.cf_order_id || ""
+    );
+
     await payment.save();
 
+    // 14. Send response to frontend
     return res.status(201).json({
       success: true,
-      message: "UPI payment order created.",
+      message: "Payment order created successfully.",
       orderId,
-      paymentSessionId: response.data.payment_session_id,
+      paymentSessionId:
+        response.data.payment_session_id,
       amount,
       currency: "INR",
     });
+
   } catch (error) {
+
     console.error(
       "Cashfree order error:",
       error.response?.data || error.message
     );
 
+    // Mark failed only when this request created an order attempt.
+    // Don't mark an older pending order failed for unrelated errors.
     if (payment && payment.status === "PENDING") {
       payment.status = "FAILED";
+
       await payment.save().catch((err) => {
-        console.error("Payment update error:", err.message);
+        console.error(
+          "Payment update error:",
+          err.message
+        );
       });
     }
 
-    return res.status(error.response?.status || 500).json({
+    return res.status(
+      error.response?.status || 500
+    ).json({
       success: false,
       message: "Unable to create payment order.",
       error: error.response?.data || error.message,
     });
   }
 };
+
 
 // ==========================================
 // CUSTOMER: VERIFY UPI PAYMENT
