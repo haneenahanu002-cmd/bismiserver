@@ -70,7 +70,7 @@ async function startServer() {
     console.log("MongoDB Atlas connected successfully!");
 
     app.listen(PORT, () => {
-      console.log(`Server running at http://localhost:${PORT}`);
+      console.log(`Server running at https://bismiserver.onrender.com`);
     });
   } catch (error) {
     console.error("Backend startup failed:", error.message);
