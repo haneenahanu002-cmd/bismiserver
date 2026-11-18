@@ -22,6 +22,7 @@ const dashboardRoutes = require("./routes/dashboardRoutes");
 
 const machineRoutes = require("./routes/machineRoutes");
 const messageRoutes = require("./routes/messageRoutes");
+const groupRoutes = require("./routes/groupRoutes");
 const aiRoutes = require("./routes/aiRoutes");
 const { initMessageSocket } = require("./socket/messageSocket");
 app.use(cors());
@@ -58,7 +59,9 @@ app.use("/api/settings", settingsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/machines", machineRoutes);
 app.use("/api/messages", messageRoutes);
+app.use("/api/messages/groups", groupRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/uploads", express.static(require("path").join(__dirname, "uploads")));
 
 const PORT = process.env.PORT || 5000;
 

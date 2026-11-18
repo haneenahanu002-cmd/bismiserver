@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Conversation = require("../models/Conversation");
 const Message = require("../models/Message");
+const Group = require("../models/Group");
 
 function initMessageSocket(io) {
   io.use(async (socket, next) => {
@@ -100,6 +101,40 @@ function initMessageSocket(io) {
           conversationId,
           userId: socket.user._id,
         });
+      }
+    });
+
+    socket.on("join_group", async (groupId) => {
+      const group = await Group.findById(groupId);
+      if (!group || !group.isActive || group.deletedAt) return;
+      if (!group.members.some((m) => String(m) === String(socket.user._id))) return;
+      socket.join(`group_${groupId}`);
+    });
+
+    socket.on("leave_group", (groupId) => {
+      socket.leave(`group_${groupId}`);
+    });
+
+    socket.on("group_message", async (payload) => {
+      try {
+        const { groupId, content, messageType, location } = payload || {};
+        const group = await Group.findById(groupId);
+        if (!group || !group.isActive || group.deletedAt) return;
+        if (!group.members.some((m) => String(m) === String(socket.user._id))) return;
+
+        const message = await Message.create({
+          group: groupId,
+          sender: socket.user._id,
+          content: content || "",
+          messageType: messageType || "text",
+          location,
+        });
+
+        const populated = await Message.findById(message._id).populate("sender", "username role");
+
+        io.to(`group_${groupId}`).emit("new_group_message", populated);
+      } catch (error) {
+        socket.emit("message_error", { message: "Unable to send group message." });
       }
     });
 
