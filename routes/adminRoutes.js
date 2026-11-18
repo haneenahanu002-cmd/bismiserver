@@ -7,6 +7,7 @@ const User = require("../models/User");
 const adminMiddleware = require("../middleware/adminMiddleware");
 const Booking = require("../models/Booking");
 const { getAllUsers } = require("../controllers/adminController");
+const { reassignBooking } = require("../controllers/bookingController");
 const authMiddleware = require("../middleware/authmiddleware");
 // Admin dashboard
 router.get("/dashboard", adminMiddleware, (req, res) => {
@@ -196,6 +197,9 @@ router.get("/bookings", adminMiddleware, async (req, res) => {
     });
   }
 });
+
+// Reassign booking to another operator
+router.patch("/bookings/:id/reassign", adminMiddleware, reassignBooking);
 
 // Approve or Reject booking and assign operator
 router.patch(

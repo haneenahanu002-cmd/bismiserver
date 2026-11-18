@@ -74,6 +74,52 @@ const bookingSchema = new mongoose.Schema(
       default: null,
     },
 
+    operatorDecision: {
+      type: String,
+      enum: ["Pending", "Accepted", "Rejected"],
+      default: "Pending",
+    },
+
+    rejectionReason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    assignmentHistory: [
+      {
+        operatorId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+        },
+        action: {
+          type: String,
+          trim: true,
+        },
+        previousStatus: {
+          type: String,
+          trim: true,
+        },
+        newStatus: {
+          type: String,
+          trim: true,
+        },
+        reason: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+        changedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+        },
+        timestamp: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
     rejectionReason: {
       type: String,
       default: "",

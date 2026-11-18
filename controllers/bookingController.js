@@ -143,7 +143,21 @@ const acceptAssignedJob = async (req, res) => {
       });
     }
 
+    const previousDecision = booking.operatorDecision || "Pending";
+
     booking.status = "Accepted";
+    booking.operatorDecision = "Accepted";
+    booking.assignmentHistory = booking.assignmentHistory || [];
+    booking.assignmentHistory.push({
+      operatorId: req.user._id,
+      action: "Accepted",
+      previousStatus: previousDecision,
+      newStatus: "Accepted",
+      reason: "",
+      changedBy: req.user._id,
+      timestamp: new Date(),
+    });
+
     await booking.save();
 
     const updatedBooking = await Booking.findById(booking._id)
@@ -159,6 +173,77 @@ const acceptAssignedJob = async (req, res) => {
 
     return res.status(500).json({
       message: "Failed to accept assigned job.",
+    });
+  }
+};
+
+// Operator rejects an assigned job
+const rejectAssignedJob = async (req, res) => {
+  try {
+    if (req.user.role !== "operator") {
+      return res.status(403).json({
+        message: "Only operators can reject assigned jobs.",
+      });
+    }
+
+    const { id } = req.params;
+    const { reason } = req.body || {};
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        message: "Invalid booking ID.",
+      });
+    }
+
+    const booking = await Booking.findOne({
+      _id: id,
+      operatorId: req.user._id,
+      status: { $in: ["Assigned", "Accepted"] },
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        message: "Job not found or no longer eligible for rejection.",
+      });
+    }
+
+    if (booking.status === "In Progress" || booking.status === "Completed") {
+      return res.status(400).json({
+        message: "Cannot reject a job that has already started or completed.",
+      });
+    }
+
+    const previousDecision = booking.operatorDecision || "Pending";
+
+    booking.status = "Assigned";
+    booking.operatorDecision = "Rejected";
+    booking.rejectionReason = (reason || "").trim();
+    booking.assignmentHistory = booking.assignmentHistory || [];
+    booking.assignmentHistory.push({
+      operatorId: req.user._id,
+      action: "Rejected",
+      previousStatus: previousDecision,
+      newStatus: "Rejected",
+      reason: (reason || "").trim(),
+      changedBy: req.user._id,
+      timestamp: new Date(),
+    });
+
+    await booking.save();
+
+    const updatedBooking = await Booking.findById(booking._id)
+      .populate("userId", "username email phone")
+      .populate("operatorId", "username email phone");
+
+    return res.status(200).json({
+      message: "Job rejected successfully.",
+      booking: updatedBooking,
+    });
+  } catch (error) {
+    console.error("Reject assigned job error:", error);
+
+    return res.status(500).json({
+      message: "Failed to reject assigned job.",
     });
   }
 };
@@ -441,15 +526,92 @@ const getMyWorkHistory = async (req, res) => {
   }
 };
 
+// Admin reassigns a booking to another operator
+const reassignBooking = async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({
+        message: "Only admins can reassign bookings.",
+      });
+    }
+
+    const { id } = req.params;
+    const { operatorId, machine } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(operatorId)) {
+      return res.status(400).json({
+        message: "Invalid booking or operator ID.",
+      });
+    }
+
+    const booking = await Booking.findById(id);
+    if (!booking) {
+      return res.status(404).json({
+        message: "Booking not found.",
+      });
+    }
+
+    if (["Completed", "Cancelled"].includes(booking.status)) {
+      return res.status(400).json({
+        message: "Cannot reassign a completed or cancelled booking.",
+      });
+    }
+
+    const operator = await User.findById(operatorId);
+    if (!operator || operator.role !== "operator") {
+      return res.status(400).json({
+        message: "Selected account is not a valid operator.",
+      });
+    }
+
+    const previousOperatorId = booking.operatorId;
+
+    booking.operatorId = operator._id;
+    if (machine && machine.trim()) booking.machine = machine.trim();
+    booking.status = "Assigned";
+    booking.operatorDecision = "Pending";
+    booking.rejectionReason = "";
+
+    booking.assignmentHistory = booking.assignmentHistory || [];
+    booking.assignmentHistory.push({
+      operatorId: operator._id,
+      action: "Reassigned",
+      previousStatus: "Rejected",
+      newStatus: "Assigned",
+      reason: "Admin reassignment",
+      changedBy: req.user._id,
+      timestamp: new Date(),
+    });
+
+    await booking.save();
+
+    const updatedBooking = await Booking.findById(booking._id)
+      .populate("userId", "username email phone")
+      .populate("operatorId", "username email phone");
+
+    return res.status(200).json({
+      message: "Booking reassigned successfully.",
+      booking: updatedBooking,
+    });
+  } catch (error) {
+    console.error("Reassign booking error:", error);
+    return res.status(500).json({
+      message: "Failed to reassign booking.",
+    });
+  }
+};
+
 module.exports = {
   createBooking,
   getMyBookings,
   getMyAssignedJobs,
   acceptAssignedJob,
+  rejectAssignedJob,
   getMyAcceptedJobs,
   decideBooking,
+  reassignBooking,
   getMyDashboard,
   startAssignedJob,
-endAssignedJob,
-getMyWorkHistory,
+  endAssignedJob,
+  getMyWorkHistory,
 };

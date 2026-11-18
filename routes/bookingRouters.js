@@ -6,6 +6,8 @@ const {
   getMyBookings,
   getMyAssignedJobs,
   acceptAssignedJob,
+  rejectAssignedJob,
+  reassignBooking,
   getMyAcceptedJobs,
   getMyDashboard,
   startAssignedJob,
@@ -31,6 +33,12 @@ router.patch(
   "/operator/assigned-jobs/:id/accept",
   authMiddleware,
   acceptAssignedJob
+);
+
+router.patch(
+  "/operator/assigned-jobs/:id/reject",
+  authMiddleware,
+  rejectAssignedJob
 );
 
 router.get(

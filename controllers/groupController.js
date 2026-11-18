@@ -14,7 +14,17 @@ const createGroup = async (req, res) => {
       return res.status(403).json({ success: false, message: "Admin only." });
     }
 
-    const { name, description, memberIds } = req.body;
+    const { name, description } = req.body;
+    let memberIds = req.body.memberIds;
+
+    if (typeof memberIds === "string") {
+      try {
+        memberIds = JSON.parse(memberIds);
+      } catch {
+        memberIds = [];
+      }
+    }
+
     if (!name || !name.trim()) {
       return res.status(400).json({ success: false, message: "Group name is required." });
     }
@@ -22,12 +32,15 @@ const createGroup = async (req, res) => {
     const members = Array.isArray(memberIds) ? memberIds : [];
     const validMembers = await User.find({ _id: { $in: members } }).select("_id");
 
+    const memberSet = new Set(validMembers.map((u) => String(u._id)));
+    memberSet.add(String(req.user._id));
+
     const group = await Group.create({
       name: name.trim(),
       description: description || "",
       profileImage: req.file ? `/uploads/${req.file.filename}` : "",
       createdBy: req.user._id,
-      members: validMembers.map((u) => u._id),
+      members: Array.from(memberSet),
     });
 
     return res.status(201).json({ success: true, group });
@@ -109,7 +122,15 @@ const addMembers = async (req, res) => {
       return res.status(404).json({ success: false, message: "Group not found." });
     }
 
-    const { memberIds } = req.body;
+    let memberIds = req.body.memberIds;
+    if (typeof memberIds === "string") {
+      try {
+        memberIds = JSON.parse(memberIds);
+      } catch {
+        memberIds = [];
+      }
+    }
+
     if (!Array.isArray(memberIds)) {
       return res.status(400).json({ success: false, message: "memberIds must be an array." });
     }
