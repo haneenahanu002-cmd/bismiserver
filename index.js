@@ -2,6 +2,7 @@
 require("dotenv").config();
 
 const express = require("express");
+const http = require("http");
 const mongoose = require("mongoose");
 const cors = require("cors");
 
@@ -20,6 +21,9 @@ const settingsRoutes = require("./routes/settingsRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 
 const machineRoutes = require("./routes/machineRoutes");
+const messageRoutes = require("./routes/messageRoutes");
+const aiRoutes = require("./routes/aiRoutes");
+const { initMessageSocket } = require("./socket/messageSocket");
 app.use(cors());
 app.use(
   express.json({
@@ -53,6 +57,8 @@ app.use("/api/reports", reportRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/machines", machineRoutes);
+app.use("/api/messages", messageRoutes);
+app.use("/api/ai", aiRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -69,7 +75,18 @@ async function startServer() {
 
     console.log("MongoDB Atlas connected successfully!");
 
-    app.listen(PORT, () => {
+    const server = http.createServer(app);
+    const { Server } = require("socket.io");
+    const io = new Server(server, {
+      cors: {
+        origin: "*",
+        methods: ["GET", "POST"],
+      },
+    });
+
+    initMessageSocket(io);
+
+    server.listen(PORT, () => {
       console.log(`Server running at https://bismiserver.onrender.com`);
     });
   } catch (error) {
