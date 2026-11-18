@@ -93,7 +93,11 @@ const chat = async (req, res) => {
       conversationId: conversation._id,
     });
   } catch (error) {
-    console.error("AI chat error:", error.message);
+    console.error("AI chat error:", {
+      status: error.status,
+      code: error.code,
+      message: error.message,
+    });
     return res.status(500).json({
       success: false,
       message: "Bismi AI is temporarily unavailable. Please try again.",

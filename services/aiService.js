@@ -11,34 +11,52 @@ async function generateReply(systemPrompt, userMessage) {
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
-  const response = await axios.post(
-    url,
-    {
-      system_instruction: {
-        parts: [{ text: systemPrompt }],
-      },
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: userMessage }],
+  try {
+    const response = await axios.post(
+      url,
+      {
+        system_instruction: {
+          parts: [{ text: systemPrompt }],
         },
-      ],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 1024,
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: userMessage }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 1024,
+        },
       },
-    },
-    { timeout: 30000 }
-  );
+      { timeout: 30000 }
+    );
 
-  const candidate = response.data?.candidates?.[0];
-  const text = candidate?.content?.parts?.map((p) => p.text).join("") || "";
+    const candidate = response.data?.candidates?.[0];
+    const text = candidate?.content?.parts?.map((p) => p.text).join("") || "";
 
-  if (!text) {
-    throw new Error("AI did not return a response.");
+    if (!text) {
+      const error = new Error("AI did not return a response.");
+      error.status = response.status;
+      error.code = candidate?.finishReason || "NO_TEXT";
+      throw error;
+    }
+
+    return text;
+  } catch (error) {
+    const status = error.response?.status;
+    const code = error.response?.data?.error?.code || error.code;
+    const message = error.response?.data?.error?.message || error.message;
+    console.error("Gemini AI error:", {
+      status,
+      code,
+      message,
+    });
+    const wrapped = new Error(message);
+    wrapped.status = status;
+    wrapped.code = code;
+    throw wrapped;
   }
-
-  return text;
 }
 
 module.exports = { generateReply };

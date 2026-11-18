@@ -8,6 +8,27 @@ const getConversations = async (req, res) => {
   try {
     const userId = req.user._id;
 
+    // Ensure a permanent conversation with an Admin exists for customers/operators.
+    if (req.user.role !== "admin") {
+      const adminUser = await User.findOne({ role: "admin" });
+
+      if (adminUser) {
+        let adminConversation = await Conversation.findOne({
+          participants: { $all: [userId, adminUser._id], $size: 2 },
+        });
+
+        if (!adminConversation) {
+          adminConversation = await Conversation.create({
+            participants: [userId, adminUser._id],
+            unreadCounts: {
+              [String(userId)]: 0,
+              [String(adminUser._id)]: 0,
+            },
+          });
+        }
+      }
+    }
+
     const conversations = await Conversation.find({
       participants: userId,
     })
@@ -28,6 +49,15 @@ const getConversations = async (req, res) => {
         updatedAt: conv.updatedAt,
       };
     });
+
+    if (req.user.role !== "admin") {
+      result.sort((a, b) => {
+        const aAdmin = a.participant?.role === "admin" ? 0 : 1;
+        const bAdmin = b.participant?.role === "admin" ? 0 : 1;
+        if (aAdmin !== bAdmin) return aAdmin - bAdmin;
+        return new Date(b.lastMessageAt || 0) - new Date(a.lastMessageAt || 0);
+      });
+    }
 
     return res.status(200).json({ success: true, conversations: result });
   } catch (error) {
