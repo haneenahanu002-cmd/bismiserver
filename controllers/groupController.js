@@ -213,6 +213,9 @@ const sendGroupMessage = async (req, res) => {
     const locationLatitude = body.locationLatitude;
     const locationLongitude = body.locationLongitude;
     const locationUrl = body.locationUrl;
+    const locationType = body.locationType || "current";
+    const isLive = body.isLive === "true" || body.isLive === true;
+    const expiresAt = body.expiresAt || null;
 
     let attachments = [];
     if (req.file) {
@@ -235,6 +238,9 @@ const sendGroupMessage = async (req, res) => {
             latitude: Number(locationLatitude),
             longitude: Number(locationLongitude),
             url: locationUrl || `https://www.google.com/maps?q=${locationLatitude},${locationLongitude}`,
+            type: locationType,
+            isLive,
+            expiresAt: expiresAt ? new Date(expiresAt) : null,
           }
         : undefined,
     });

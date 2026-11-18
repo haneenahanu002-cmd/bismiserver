@@ -39,6 +39,19 @@ const messageSchema = new mongoose.Schema(
       latitude: Number,
       longitude: Number,
       url: String,
+      type: {
+        type: String,
+        enum: ["current", "live", "picked"],
+        default: "current",
+      },
+      isLive: {
+        type: Boolean,
+        default: false,
+      },
+      expiresAt: {
+        type: Date,
+        default: null,
+      },
     },
     readBy: [
       {

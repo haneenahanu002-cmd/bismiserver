@@ -138,6 +138,62 @@ function initMessageSocket(io) {
       }
     });
 
+    socket.on("location_update", async (payload) => {
+      try {
+        const { conversationId, messageId, latitude, longitude } = payload || {};
+        if (!conversationId || !messageId) return;
+
+        const conversation = await Conversation.findById(conversationId);
+        if (!conversation) return;
+        if (!conversation.participants.some((p) => String(p) === String(socket.user._id))) return;
+
+        const message = await Message.findById(messageId);
+        if (!message || !message.location?.isLive) return;
+        if (new Date() > new Date(message.location.expiresAt)) return;
+
+        message.location.latitude = Number(latitude);
+        message.location.longitude = Number(longitude);
+        message.location.url = `https://www.google.com/maps?q=${latitude},${longitude}`;
+        await message.save();
+
+        io.to(`conversation_${conversationId}`).emit("location_updated", {
+          messageId,
+          latitude: Number(latitude),
+          longitude: Number(longitude),
+          url: message.location.url,
+        });
+      } catch (error) {
+        socket.emit("message_error", { message: "Unable to update location." });
+      }
+    });
+
+    socket.on("group_location_update", async (payload) => {
+      try {
+        const { groupId, messageId, latitude, longitude } = payload || {};
+        const group = await Group.findById(groupId);
+        if (!group || !group.isActive || group.deletedAt) return;
+        if (!group.members.some((m) => String(m) === String(socket.user._id))) return;
+
+        const message = await Message.findById(messageId);
+        if (!message || !message.location?.isLive) return;
+        if (new Date() > new Date(message.location.expiresAt)) return;
+
+        message.location.latitude = Number(latitude);
+        message.location.longitude = Number(longitude);
+        message.location.url = `https://www.google.com/maps?q=${latitude},${longitude}`;
+        await message.save();
+
+        io.to(`group_${groupId}`).emit("group_location_updated", {
+          messageId,
+          latitude: Number(latitude),
+          longitude: Number(longitude),
+          url: message.location.url,
+        });
+      } catch (error) {
+        socket.emit("message_error", { message: "Unable to update location." });
+      }
+    });
+
     socket.on("disconnect", () => {});
   });
 }

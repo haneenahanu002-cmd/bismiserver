@@ -175,6 +175,9 @@ const sendMessage = async (req, res) => {
     const locationLatitude = body.locationLatitude;
     const locationLongitude = body.locationLongitude;
     const locationUrl = body.locationUrl;
+    const locationType = body.locationType || "current";
+    const isLive = body.isLive === "true" || body.isLive === true;
+    const expiresAt = body.expiresAt || null;
 
     const conversation = await Conversation.findById(conversationId);
     if (!conversation || !isParticipant(conversation, userId)) {
@@ -224,6 +227,9 @@ const sendMessage = async (req, res) => {
             url:
               locationUrl ||
               `https://www.google.com/maps?q=${locationLatitude},${locationLongitude}`,
+            type: locationType,
+            isLive,
+            expiresAt: expiresAt ? new Date(expiresAt) : null,
           }
         : undefined,
     });
