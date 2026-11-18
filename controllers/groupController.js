@@ -207,7 +207,12 @@ const sendGroupMessage = async (req, res) => {
       return res.status(403).json({ success: false, message: "Access denied." });
     }
 
-    const { content, messageType, locationLatitude, locationLongitude, locationUrl } = req.body;
+    const body = req.body || {};
+    const content = body.content;
+    const messageType = body.messageType;
+    const locationLatitude = body.locationLatitude;
+    const locationLongitude = body.locationLongitude;
+    const locationUrl = body.locationUrl;
 
     let attachments = [];
     if (req.file) {

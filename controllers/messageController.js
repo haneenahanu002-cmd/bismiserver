@@ -170,7 +170,11 @@ const sendMessage = async (req, res) => {
   try {
     const { conversationId } = req.params;
     const userId = req.user._id;
-    const { content } = req.body;
+    const body = req.body || {};
+    const content = body.content || "";
+    const locationLatitude = body.locationLatitude;
+    const locationLongitude = body.locationLongitude;
+    const locationUrl = body.locationUrl;
 
     const conversation = await Conversation.findById(conversationId);
     if (!conversation || !isParticipant(conversation, userId)) {
@@ -180,17 +184,48 @@ const sendMessage = async (req, res) => {
       });
     }
 
-    if (!content || !content.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Message content is required.",
+    const attachments = [];
+    if (req.file) {
+      attachments.push({
+        url: `/uploads/${req.file.filename}`,
+        name: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
       });
     }
+
+    const hasLocation = Boolean(locationLatitude && locationLongitude);
+
+    if (!content.trim() && attachments.length === 0 && !hasLocation) {
+      return res.status(400).json({
+        success: false,
+        message: "Message content or attachment is required.",
+      });
+    }
+
+    const messageType = req.file
+      ? req.file.mimetype.startsWith("image/")
+        ? "image"
+        : "document"
+      : hasLocation
+      ? "location"
+      : "text";
 
     const message = await Message.create({
       conversation: conversationId,
       sender: userId,
       content: content.trim(),
+      messageType,
+      attachments,
+      location: hasLocation
+        ? {
+            latitude: Number(locationLatitude),
+            longitude: Number(locationLongitude),
+            url:
+              locationUrl ||
+              `https://www.google.com/maps?q=${locationLatitude},${locationLongitude}`,
+          }
+        : undefined,
     });
 
     const populated = await Message.findById(message._id).populate(
@@ -198,7 +233,7 @@ const sendMessage = async (req, res) => {
       "username role"
     );
 
-    conversation.lastMessage = content.trim().slice(0, 120);
+    conversation.lastMessage = (content.trim() || (attachments.length ? "Attachment" : "Location")).slice(0, 120);
     conversation.lastMessageAt = new Date();
 
     const otherId = conversation.participants.find(
