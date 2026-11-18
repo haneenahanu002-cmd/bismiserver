@@ -39,6 +39,7 @@ const messageSchema = new mongoose.Schema(
       latitude: Number,
       longitude: Number,
       url: String,
+      address: String,
       type: {
         type: String,
         enum: ["current", "live", "picked"],

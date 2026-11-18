@@ -213,6 +213,7 @@ const sendGroupMessage = async (req, res) => {
     const locationLatitude = body.locationLatitude;
     const locationLongitude = body.locationLongitude;
     const locationUrl = body.locationUrl;
+    const locationAddress = body.locationAddress;
     const locationType = body.locationType || "current";
     const isLive = body.isLive === "true" || body.isLive === true;
     const expiresAt = body.expiresAt || null;
@@ -238,6 +239,7 @@ const sendGroupMessage = async (req, res) => {
             latitude: Number(locationLatitude),
             longitude: Number(locationLongitude),
             url: locationUrl || `https://www.google.com/maps?q=${locationLatitude},${locationLongitude}`,
+            address: locationAddress || "",
             type: locationType,
             isLive,
             expiresAt: expiresAt ? new Date(expiresAt) : null,
