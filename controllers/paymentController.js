@@ -6,20 +6,6 @@ const Bill = require("../models/Bill");
 const Payment = require("../models/Payment");
 const User = require("../models/User");
 
-const API_VERSION = "2025-01-01";
-
-const CASHFREE_BASE_URL =
-  process.env.CASHFREE_ENV === "PRODUCTION"
-    ? "https://api.cashfree.com/pg"
-    : "https://sandbox.cashfree.com/pg";
-
-const getCashfreeHeaders = () => ({
-  "Content-Type": "application/json",
-  "x-api-version": API_VERSION,
-  "x-client-id": process.env.CASHFREE_CLIENT_ID,
-  "x-client-secret": process.env.CASHFREE_CLIENT_SECRET,
-});
-
 const generateOrderId = () =>
   `bismi_${crypto.randomUUID().replace(/-/g, "")}`;
 
@@ -73,14 +59,14 @@ const createUpiOrder = async (req, res) => {
       });
     }
 
-    // 2. Cashfree credentials validation
+    // 2. Razorpay credentials validation
     if (
-      !process.env.CASHFREE_CLIENT_ID ||
-      !process.env.CASHFREE_CLIENT_SECRET
+      !process.env.RAZORPAY_KEY_ID ||
+      !process.env.RAZORPAY_KEY_SECRET
     ) {
       return res.status(500).json({
         success: false,
-        message: "Cashfree API credentials are missing.",
+        message: "Razorpay API credentials are missing.",
       });
     }
 
@@ -133,75 +119,60 @@ const createUpiOrder = async (req, res) => {
         });
       }
 
-      // Check existing UPI order with Cashfree
-      try {
-        const existingOrder = await axios.get(
-          `${CASHFREE_BASE_URL}/orders/${payment.orderId}`,
-          {
-            headers: getCashfreeHeaders(),
-            timeout: 15000,
-          }
-        );
+      // Check existing UPI order with Razorpay
+      if (payment.cfOrderId) {
+        try {
+          const auth = Buffer.from(
+            `${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`
+          ).toString("base64");
 
-        const orderStatus = existingOrder.data.order_status;
-
-        // Existing order is still active
-        if (
-          orderStatus === "ACTIVE" &&
-          existingOrder.data.payment_session_id
-        ) {
-          return res.status(200).json({
-            success: true,
-            message: "Existing payment order retrieved.",
-            orderId: payment.orderId,
-            paymentSessionId:
-              existingOrder.data.payment_session_id,
-            amount: payment.amount,
-            currency: "INR",
-          });
-        }
-
-        // Cashfree says already paid
-        if (orderStatus === "PAID") {
-          return res.status(409).json({
-            success: false,
-            message:
-              "Payment may already be completed. Please verify your payment.",
-          });
-        }
-
-        // Expired or terminated order
-        if (
-          orderStatus === "EXPIRED" ||
-          orderStatus === "TERMINATED"
-        ) {
-          payment.status = "FAILED";
-          await payment.save();
-        } else {
-          return res.status(409).json({
-            success: false,
-            message: "Your previous payment is still processing.",
-          });
-        }
-
-      } catch (cashfreeError) {
-
-        // Only mark failed if Cashfree confirms order doesn't exist
-        if (cashfreeError.response?.status === 404) {
-          payment.status = "FAILED";
-          await payment.save();
-        } else {
-          console.error(
-            "Existing Cashfree order check failed:",
-            cashfreeError.response?.data ||
-              cashfreeError.message
+          const existingPayments = await axios.get(
+            `https://api.razorpay.com/v1/orders/${payment.cfOrderId}/payments`,
+            {
+              headers: {
+                Authorization: `Basic ${auth}`,
+              },
+              timeout: 15000,
+            }
           );
 
-          return res.status(503).json({
-            success: false,
-            message:
-              "Unable to check previous payment. Please try again.",
+          const capturedPayment = Array.isArray(
+            existingPayments.data?.items
+          )
+            ? existingPayments.data.items.find(
+                (item) => item.status === "captured"
+              )
+            : null;
+
+          if (capturedPayment) {
+            await markPaymentSuccessful(
+              payment,
+              capturedPayment.id
+            );
+
+            return res.status(409).json({
+              success: false,
+              message:
+                "Payment may already be completed. Please verify your payment.",
+            });
+          }
+
+          // Reuse existing Razorpay order
+          return res.status(200).json({
+            success: true,
+            message: "Razorpay order created successfully.",
+            orderId: String(payment._id),
+            razorpayOrderId: payment.cfOrderId,
+            keyId: process.env.RAZORPAY_KEY_ID,
+            amount: Number(payment.amount || 0),
+            currency: "INR",
           });
+        } catch (razorpayError) {
+          console.error(
+            "Existing Razorpay order check failed:",
+            razorpayError.response?.data ||
+              razorpayError.message
+          );
         }
       }
     }
@@ -259,57 +230,52 @@ const createUpiOrder = async (req, res) => {
       });
     }
 
-    // 11. Cashfree request body
+    // 11. Razorpay request body
+    const auth = Buffer.from(
+      `${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`
+    ).toString("base64");
+
     const requestBody = {
-      order_id: orderId,
-      order_amount: amount,
-      order_currency: "INR",
-
-      customer_details: {
-        customer_id: String(req.user._id),
-        customer_name: customer.username || "Customer",
-        customer_email: customer.email,
-        customer_phone: phone,
+      amount: Math.round(amount * 100),
+      currency: "INR",
+      receipt: orderId,
+      notes: {
+        billId: String(bill._id),
+        userId: String(req.user._id),
       },
-
-      order_meta: {
-        return_url:
-          `${process.env.FRONTEND_URL}/userpayments?order_id=${orderId}`,
-      },
-
-      order_note: `Bismi Earth Movers bill ${bill._id}`,
     };
 
-    // 12. Create Cashfree order
+    // 12. Create Razorpay order
     const response = await axios.post(
-      `${CASHFREE_BASE_URL}/orders`,
+      "https://api.razorpay.com/v1/orders",
       requestBody,
       {
-        headers: getCashfreeHeaders(),
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/json",
+        },
         timeout: 20000,
       }
     );
 
-    if (!response.data.payment_session_id) {
+    if (!response.data.id) {
       throw new Error(
-        "Cashfree did not return a payment session ID."
+        "Razorpay did not return an order ID."
       );
     }
 
-    // 13. Save Cashfree order ID
-    payment.cfOrderId = String(
-      response.data.cf_order_id || ""
-    );
+    // 13. Save Razorpay order ID
+    payment.cfOrderId = String(response.data.id || "");
 
     await payment.save();
 
     // 14. Send response to frontend
     return res.status(201).json({
       success: true,
-      message: "Payment order created successfully.",
-      orderId,
-      paymentSessionId:
-        response.data.payment_session_id,
+      message: "Razorpay order created successfully.",
+      orderId: String(payment._id),
+      razorpayOrderId: response.data.id,
+      keyId: process.env.RAZORPAY_KEY_ID,
       amount,
       currency: "INR",
     });
@@ -317,13 +283,17 @@ const createUpiOrder = async (req, res) => {
   } catch (error) {
 
     console.error(
-      "Cashfree order error:",
+      "Razorpay order error:",
       error.response?.data || error.message
     );
 
-    // Mark failed only when this request created an order attempt.
-    // Don't mark an older pending order failed for unrelated errors.
-    if (payment && payment.status === "PENDING") {
+    // Mark failed only when a Razorpay order was actually created.
+    // Do not mark an older pending payment failed for unrelated errors.
+    if (
+      payment &&
+      payment.status === "PENDING" &&
+      payment.cfOrderId
+    ) {
       payment.status = "FAILED";
 
       await payment.save().catch((err) => {
@@ -358,10 +328,33 @@ const verifyUpiPayment = async (req, res) => {
       });
     }
 
-    const payment = await Payment.findOne({
-      orderId: req.params.orderId,
-      userId: req.user._id,
-    });
+    const {
+      orderId: bodyOrderId,
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
+    } = req.body || {};
+
+    const orderId = bodyOrderId || req.params?.orderId;
+
+    let payment = null;
+
+    if (razorpayOrderId) {
+      payment = await Payment.findOne({
+        cfOrderId: razorpayOrderId,
+        userId: req.user._id,
+      });
+    } else if (orderId && /^[a-fA-F0-9]{24}$/.test(orderId)) {
+      payment = await Payment.findOne({
+        _id: orderId,
+        userId: req.user._id,
+      });
+    } else if (orderId) {
+      payment = await Payment.findOne({
+        orderId,
+        userId: req.user._id,
+      });
+    }
 
     if (!payment) {
       return res.status(404).json({
@@ -391,54 +384,91 @@ const verifyUpiPayment = async (req, res) => {
       });
     }
 
-    const headers = getCashfreeHeaders();
+    // Verify Razorpay signature when provided by checkout callback.
+    if (
+      razorpayPaymentId &&
+      razorpaySignature &&
+      payment.cfOrderId
+    ) {
+      const expectedSignature = crypto
+        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+        .update(`${payment.cfOrderId}|${razorpayPaymentId}`)
+        .digest("hex");
 
-    const orderResponse = await axios.get(
-      `${CASHFREE_BASE_URL}/orders/${payment.orderId}`,
-      { headers }
-    );
+      if (expectedSignature !== razorpaySignature) {
+        payment.status = "FAILED";
+        await payment.save();
 
-    if (orderResponse.data.order_status !== "PAID") {
+        return res.status(200).json({
+          success: true,
+          paymentStatus: "FAILED",
+          message: "Payment signature verification failed.",
+        });
+      }
+
+      await markPaymentSuccessful(payment, razorpayPaymentId);
+
       return res.status(200).json({
         success: true,
-        paymentStatus: "PENDING",
-        message: "Payment is not confirmed yet.",
+        paymentStatus: "PAID",
+        message: "Payment verified successfully.",
       });
     }
 
-    const paymentsResponse = await axios.get(
-      `${CASHFREE_BASE_URL}/orders/${payment.orderId}/payments`,
-      { headers }
-    );
+    // Fallback: check Razorpay order payments.
+    if (payment.cfOrderId) {
+      try {
+        const auth = Buffer.from(
+          `${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`
+        ).toString("base64");
 
-    const successfulPayment = paymentsResponse.data.find(
-      (item) =>
-        item.payment_status === "SUCCESS" &&
-        Math.round(Number(item.payment_amount) * 100) ===
-          Math.round(Number(payment.amount) * 100)
-    );
+        const paymentsResponse = await axios.get(
+          `https://api.razorpay.com/v1/orders/${payment.cfOrderId}/payments`,
+          {
+            headers: {
+              Authorization: `Basic ${auth}`,
+            },
+            timeout: 15000,
+          }
+        );
 
-    if (!successfulPayment) {
-      return res.status(200).json({
-        success: true,
-        paymentStatus: "PENDING",
-        message: "Successful payment confirmation is pending.",
-      });
+        const capturedPayment = Array.isArray(
+          paymentsResponse.data?.items
+        )
+          ? paymentsResponse.data.items.find(
+              (item) => item.status === "captured"
+            )
+          : null;
+
+        if (capturedPayment) {
+          await markPaymentSuccessful(
+            payment,
+            capturedPayment.id
+          );
+
+          return res.status(200).json({
+            success: true,
+            paymentStatus: "PAID",
+            message: "Payment verified successfully.",
+          });
+        }
+      } catch (razorpayError) {
+        console.error(
+          "Verify Razorpay payment error:",
+          razorpayError.response?.data ||
+            razorpayError.message
+        );
+      }
     }
-
-    await markPaymentSuccessful(
-      payment,
-      successfulPayment.cf_payment_id
-    );
 
     return res.status(200).json({
       success: true,
-      paymentStatus: "PAID",
-      message: "Payment verified successfully.",
+      paymentStatus: "PENDING",
+      message: "Payment is not confirmed yet.",
     });
   } catch (error) {
     console.error(
-      "Verify Cashfree payment error:",
+      "Verify Razorpay payment error:",
       error.response?.data || error.message
     );
 
@@ -450,93 +480,42 @@ const verifyUpiPayment = async (req, res) => {
 };
 
 // ==========================================
-// CASHFREE WEBHOOK
+// RAZORPAY WEBHOOK
 // POST /api/payments/webhook
 // ==========================================
-const cashfreeWebhook = async (req, res) => {
+const razorpayWebhook = async (req, res) => {
   try {
-    const signature = req.headers["x-webhook-signature"];
-    const timestamp = req.headers["x-webhook-timestamp"];
+    const signature = req.headers["x-razorpay-signature"];
     const rawBody = req.rawBody;
 
-    if (!signature || !timestamp || !rawBody) {
-      return res.status(400).send("Invalid webhook request.");
+    if (signature && process.env.RAZORPAY_KEY_SECRET && rawBody) {
+      const expectedSignature = crypto
+        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+        .update(rawBody)
+        .digest("hex");
+
+      if (signature !== expectedSignature) {
+        return res.status(401).send("Invalid webhook signature.");
+      }
     }
 
-    if (!process.env.CASHFREE_CLIENT_SECRET) {
-      return res.status(500).send("Webhook secret is missing.");
-    }
+    const event = rawBody ? JSON.parse(rawBody) : req.body;
+    const entity = event?.payload?.payment?.entity;
 
-    const expectedSignature = crypto
-      .createHmac("sha256", process.env.CASHFREE_CLIENT_SECRET)
-      .update(timestamp + rawBody)
-      .digest("base64");
+    if (event?.event === "payment.captured" && entity?.order_id) {
+      const payment = await Payment.findOne({
+        cfOrderId: entity.order_id,
+      });
 
-    const received = Buffer.from(signature);
-    const expected = Buffer.from(expectedSignature);
-
-    if (
-      received.length !== expected.length ||
-      !crypto.timingSafeEqual(received, expected)
-    ) {
-      return res.status(401).send("Invalid webhook signature.");
-    }
-
-    const event = JSON.parse(rawBody);
-
-    const orderId = event.data?.order?.order_id;
-    const cfPaymentId = event.data?.payment?.cf_payment_id;
-    const paymentStatus = event.data?.payment?.payment_status;
-
-    if (!orderId || !cfPaymentId) {
-      return res.status(200).send("Webhook received.");
-    }
-
-    if (paymentStatus !== "SUCCESS") {
-      return res.status(200).send("Payment not successful.");
-    }
-
-    const payment = await Payment.findOne({ orderId });
-
-    if (!payment || payment.status === "PAID") {
-      return res.status(200).send("Already processed or unknown order.");
-    }
-
-    if (payment.paymentMethod !== "UPI") {
-      return res.status(200).send("Not a UPI payment.");
-    }
-
-    const headers = getCashfreeHeaders();
-
-    const orderResponse = await axios.get(
-      `${CASHFREE_BASE_URL}/orders/${orderId}`,
-      { headers }
-    );
-
-    const paymentsResponse = await axios.get(
-      `${CASHFREE_BASE_URL}/orders/${orderId}/payments`,
-      { headers }
-    );
-
-    const verifiedPayment = paymentsResponse.data.find(
-      (item) =>
-        String(item.cf_payment_id) === String(cfPaymentId) &&
-        item.payment_status === "SUCCESS" &&
-        Math.round(Number(item.payment_amount) * 100) ===
-          Math.round(Number(payment.amount) * 100)
-    );
-
-    if (
-      orderResponse.data.order_status === "PAID" &&
-      verifiedPayment
-    ) {
-      await markPaymentSuccessful(payment, cfPaymentId);
+      if (payment && payment.status !== "PAID") {
+        await markPaymentSuccessful(payment, entity.id);
+      }
     }
 
     return res.status(200).send("Webhook processed.");
   } catch (error) {
     console.error(
-      "Cashfree webhook error:",
+      "Razorpay webhook error:",
       error.response?.data || error.message
     );
 
@@ -835,11 +814,10 @@ const getAllPaymentsForAdmin = async (req, res) => {
 module.exports = {
   createUpiOrder,
   verifyUpiPayment,
-  cashfreeWebhook,
+  razorpayWebhook,
   requestCashPayment,
   getMyPayments,
   getCashPaymentRequests,
   confirmCashPayment,
-   cashfreeWebhook,
   getAllPaymentsForAdmin,
 };

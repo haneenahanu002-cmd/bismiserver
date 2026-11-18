@@ -11,17 +11,18 @@ const {
   getMyPayments,
   getCashPaymentRequests,
   confirmCashPayment,
-  cashfreeWebhook,
+  razorpayWebhook,
    getAllPaymentsForAdmin,
 } = require("../controllers/paymentController");
 
-// Cashfree webhook
+// Razorpay webhook
 // Public route - signature verification happens in controller
-router.post("/webhook", cashfreeWebhook);
+router.post("/webhook", razorpayWebhook);
 
 // Customer payment routes
 router.post("/upi/create-order/:billId", authMiddleware, createUpiOrder);
 router.get("/verify/:orderId", authMiddleware, verifyUpiPayment);
+router.post("/verify", authMiddleware, verifyUpiPayment);
 
 router.post("/cash/request", authMiddleware, requestCashPayment);
 router.get("/my-payments", authMiddleware, getMyPayments);
