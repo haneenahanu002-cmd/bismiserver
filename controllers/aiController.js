@@ -1,8 +1,6 @@
-const Booking = require("../models/Booking");
-const Bill = require("../models/Bill");
-const Payment = require("../models/Payment");
 const AIConversation = require("../models/AIConversation");
 const { generateReply } = require("../services/aiService");
+const { getRoleContext } = require("../services/aiDataService");
 
 const SYSTEM_PROMPT = `You are Bismi AI, the official AI assistant for Bismi Earth Movers.
 
@@ -21,34 +19,16 @@ You must:
 - Never claim to have completed an action that you cannot perform.
 - Direct users to the appropriate application page when an action requires manual completion.
 
-You are an informational assistant, not an administrator.`;
+You are an informational assistant, not an administrator.
 
-const buildContext = async (user) => {
-  const lines = [`User role: ${user.role}`];
-
-  if (user.role === "user") {
-    const bookings = await Booking.find({ userId: user._id })
-      .select("machine work status operatorId date")
-      .limit(10);
-    const bills = await Bill.find({ userId: user._id })
-      .select("totalAmount adminFinalAmount approvalStatus")
-      .limit(10);
-    const payments = await Payment.find({ userId: user._id })
-      .select("amount status paymentMethod")
-      .limit(10);
-
-    lines.push(`Customer booking count: ${bookings.length}`);
-    lines.push(`Customer bill count: ${bills.length}`);
-    lines.push(`Customer payment count: ${payments.length}`);
-  } else if (user.role === "operator") {
-    const jobs = await Booking.find({ operatorId: user._id })
-      .select("machine work status userId date")
-      .limit(10);
-    lines.push(`Assigned job count: ${jobs.length}`);
-  }
-
-  return lines.join("\n");
-};
+Security rules:
+- Use only the authorized user context provided.
+- Never reveal another user's private data.
+- Customers can access only their own records.
+- Operators can access only their own assigned jobs.
+- Admins can access business-wide authorized summaries.
+- Never claim to have performed an action.
+- If asked for unauthorized data, refuse politely and explain the limitation.`;
 
 const chat = async (req, res) => {
   try {
@@ -69,9 +49,9 @@ const chat = async (req, res) => {
     }
 
     const user = req.user;
-    const context = await buildContext(user);
+    const context = await getRoleContext(user);
 
-    const fullPrompt = `${SYSTEM_PROMPT}\n\nContext:\n${context}\n\nUser message:\n${message.trim()}`;
+    const fullPrompt = `${SYSTEM_PROMPT}\n\nAuthorized user context (use only this data):\n${context}\n\nUser message:\n${message.trim()}`;
 
     const reply = await generateReply(fullPrompt, message.trim());
 
