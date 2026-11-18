@@ -58,8 +58,8 @@ app.use("/api/reports", reportRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/machines", machineRoutes);
-app.use("/api/messages", messageRoutes);
 app.use("/api/messages/groups", groupRoutes);
+app.use("/api/messages", messageRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/uploads", express.static(require("path").join(__dirname, "uploads")));
 

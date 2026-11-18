@@ -134,6 +134,13 @@ const getMessages = async (req, res) => {
     const { conversationId } = req.params;
     const userId = req.user._id;
 
+    if (!/^[a-fA-F0-9]{24}$/.test(conversationId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid conversation ID.",
+      });
+    }
+
     const conversation = await Conversation.findById(conversationId);
     if (!conversation || !isParticipant(conversation, userId)) {
       return res.status(403).json({
@@ -170,6 +177,14 @@ const sendMessage = async (req, res) => {
   try {
     const { conversationId } = req.params;
     const userId = req.user._id;
+
+    if (!/^[a-fA-F0-9]{24}$/.test(conversationId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid conversation ID.",
+      });
+    }
+
     const body = req.body || {};
     const content = body.content || "";
     const locationLatitude = body.locationLatitude;
